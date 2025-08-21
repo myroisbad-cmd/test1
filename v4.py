@@ -815,6 +815,8 @@ class MatcherinoUnifiedManager:
 
 def main():
     """Fonction principale"""
+    global STRICT_DATA_FILTERING
+    
     parser = argparse.ArgumentParser(
         description="Gestionnaire unifié pour les tournois Matcherino avec support de cutoff_date",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -893,7 +895,6 @@ Filtrage des données:
             logging.info("Filtrage minimal : conservation des lignes avec bans/picks partiels")
         
         # Appliquer temporairement la configuration de filtrage
-        global STRICT_DATA_FILTERING
         original_filtering = STRICT_DATA_FILTERING
         STRICT_DATA_FILTERING = strict_filtering
         
