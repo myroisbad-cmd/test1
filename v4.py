@@ -27,11 +27,16 @@ DEFAULT_ORG_ID = 1180
 # False = Garder toutes les lignes même avec des données manquantes
 STRICT_DATA_FILTERING = True
 
+# Forcer la réécriture complète du fichier CSV (supprime les anciennes données)
+# True = Toujours réécrire le fichier CSV depuis zéro
+# False = Mode append (ajouter aux données existantes)
+FORCE_REWRITE_CSV = True
+
 # ==============================
 
 # Configuration du logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changé à DEBUG pour voir tous les filtrages
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('matcherino_unified.log', encoding='utf-8'),
@@ -239,12 +244,14 @@ class MatcherinoUnifiedManager:
         banned_a = row.get('banned_brawlers_a', '').strip()
         banned_b = row.get('banned_brawlers_b', '').strip()
         if not banned_a or not banned_b:
+            logging.debug(f"Données incomplètes - Bans manquants: banned_a='{banned_a}', banned_b='{banned_b}'")
             return False
         
         # Vérifier les bans individuels (Ban1-Ban6)
         for i in range(1, 7):  # Ban1 à Ban6
             ban_value = row.get(f'Ban{i}', '').strip()
             if not ban_value:
+                logging.debug(f"Données incomplètes - Ban{i} manquant")
                 return False
         
         # Vérifier que chaque équipe a 3 joueurs complets
@@ -261,6 +268,7 @@ class MatcherinoUnifiedManager:
         for i in range(1, 7):  # P1 à P6
             p_value = row.get(f'P{i}', '').strip()
             if not p_value:
+                logging.debug(f"Données incomplètes - P{i} manquant")
                 return False
         
         # Vérifier les données Brawler1-Brawler6
@@ -281,6 +289,9 @@ class MatcherinoUnifiedManager:
         """Traite les données du tournoi selon le format CSV spécifié"""
         if not brackets:
             return []
+        
+        # Log de la configuration de filtrage
+        logging.debug(f"Traitement du tournoi {tournament_activity.get('bountyId')} avec STRICT_DATA_FILTERING = {STRICT_DATA_FILTERING}")
         
         all_rows = []
         
@@ -318,7 +329,20 @@ class MatcherinoUnifiedManager:
                     # Si pas de reports, créer une ligne de base
                     row = {**tournament_info, **match_info}
                     row.update(self._get_empty_game_data())
-                    all_rows.append(row)
+                    
+                    # Appliquer le même filtrage que pour les autres lignes
+                    if STRICT_DATA_FILTERING:
+                        # Filtrage strict : supprimer les lignes avec données manquantes
+                        if self._has_complete_data(row):
+                            all_rows.append(row)
+                        else:
+                            logging.debug(f"Ligne filtrée (données manquantes) - Match {match_info.get('match_id', 'N/A')} (pas de reports)")
+                    else:
+                        # Filtrage minimal : garder les lignes avec au moins quelques bans/picks
+                        if self._has_complete_bans_and_picks(row):
+                            all_rows.append(row)
+                        else:
+                            logging.debug(f"Ligne filtrée (bans/picks manquants) - Match {match_info.get('match_id', 'N/A')} (pas de reports)")
                 else:
                     # Grouper par set_number pour avoir une ligne par set
                     set_groups: Dict[Any, List[Dict]] = {}
@@ -712,10 +736,17 @@ class MatcherinoUnifiedManager:
                     df[col] = ''
             df = df[expected_columns]
 
-            # Mode append si le fichier existe déjà
-            mode = 'a' if os.path.exists(filename) else 'w'
-            header = not os.path.exists(filename)
-            df.to_csv(filename, index=False, encoding='utf-8', mode=mode, header=header)
+            # Gérer le mode d'écriture selon la configuration
+            if FORCE_REWRITE_CSV:
+                # Toujours réécrire le fichier pour appliquer les nouveaux filtrages
+                df.to_csv(filename, index=False, encoding='utf-8', mode='w', header=True)
+                logging.info(f"Fichier CSV réécrit complètement (mode: réécriture)")
+            else:
+                # Mode append si le fichier existe déjà (comportement original)
+                mode = 'a' if os.path.exists(filename) else 'w'
+                header = not os.path.exists(filename)
+                df.to_csv(filename, index=False, encoding='utf-8', mode=mode, header=header)
+                logging.info(f"Fichier CSV sauvegardé (mode: {'append' if mode == 'a' else 'nouveau'})")
             logging.info(f"Toutes les données sauvegardées dans {filename} ({len(df)} lignes)")
             return filename
             
@@ -815,7 +846,7 @@ class MatcherinoUnifiedManager:
 
 def main():
     """Fonction principale"""
-    global STRICT_DATA_FILTERING
+    global STRICT_DATA_FILTERING, FORCE_REWRITE_CSV
     
     parser = argparse.ArgumentParser(
         description="Gestionnaire unifié pour les tournois Matcherino avec support de cutoff_date",
@@ -871,6 +902,12 @@ Filtrage des données:
         help='Désactiver le filtrage strict (garder toutes les lignes même avec des données manquantes)'
     )
     
+    parser.add_argument(
+        '--append-mode',
+        action='store_true',
+        help='Utiliser le mode append pour ajouter aux données existantes (au lieu de réécrire le fichier)'
+    )
+    
     args = parser.parse_args()
     
     # Utiliser la cutoff_date des arguments ou la valeur par défaut configurée en haut du fichier
@@ -883,6 +920,11 @@ Filtrage des données:
     elif args.strict_filtering:
         strict_filtering = True
     
+    # Gérer le mode de sauvegarde CSV
+    force_rewrite = FORCE_REWRITE_CSV
+    if args.append_mode:
+        force_rewrite = False
+    
     try:
         if cutoff_date:
             logging.info(f"Démarrage avec cutoff_date: {cutoff_date}")
@@ -894,24 +936,28 @@ Filtrage des données:
         else:
             logging.info("Filtrage minimal : conservation des lignes avec bans/picks partiels")
         
-        # Appliquer temporairement la configuration de filtrage
+        # Appliquer temporairement les configurations
         original_filtering = STRICT_DATA_FILTERING
+        original_rewrite = FORCE_REWRITE_CSV
         STRICT_DATA_FILTERING = strict_filtering
+        FORCE_REWRITE_CSV = force_rewrite
         
         manager = MatcherinoUnifiedManager(org_id=args.org_id, cutoff_date=cutoff_date)
         manager.run_complete_process()
         
-        # Restaurer la configuration originale
+        # Restaurer les configurations originales
         STRICT_DATA_FILTERING = original_filtering
+        FORCE_REWRITE_CSV = original_rewrite
         
     except KeyboardInterrupt:
         logging.info("Processus interrompu par l'utilisateur")
     except Exception as e:
         logging.error(f"Erreur inattendue: {e}")
     finally:
-        # S'assurer que la configuration est restaurée même en cas d'erreur
+        # S'assurer que les configurations sont restaurées même en cas d'erreur
         try:
             STRICT_DATA_FILTERING = original_filtering
+            FORCE_REWRITE_CSV = original_rewrite
         except:
             pass
 
