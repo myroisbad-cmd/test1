@@ -691,10 +691,7 @@ class MatcherinoUnifiedManager:
                 logging.debug(f"Tournoi {bounty_id} déjà traité, ignoré")
                 continue
             
-            # Vérifier la cutoff_date
-            if self._should_exclude_tournament_by_date(tournament):
-                logging.debug(f"Tournoi '{bounty_title}' exclu par cutoff_date")
-                continue
+            # Note: On ne filtre plus les tournois ici, seulement les sets à la fin
             
             logging.info(f"Vérification du tournoi: '{bounty_title}' (ID: {bounty_id})")
             
