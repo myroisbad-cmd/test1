@@ -3,10 +3,26 @@ import pandas as pd
 import json
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Dict, List, Optional, Any
 import logging
 import sys
+import argparse
+
+# ==============================
+# CONFIGURATION
+# ==============================
+# Modifiez ces valeurs selon vos besoins :
+
+# Date de coupure par défaut (toutes les lignes antérieures seront supprimées)
+# Formats acceptés: "YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", "DD/MM/YYYY", "DD/MM/YYYY HH:MM:SS"
+# Mettez None ou "" pour désactiver le filtre par défaut
+DEFAULT_CUTOFF_DATE = "2024-01-01"
+
+# ID de l'organisation par défaut
+DEFAULT_ORG_ID = 1180
+
+# ==============================
 
 # Configuration du logging
 logging.basicConfig(
@@ -21,8 +37,9 @@ logging.basicConfig(
 class MatcherinoUnifiedManager:
     """Gestionnaire unifié pour les tournois Matcherino avec format CSV spécifique"""
     
-    def __init__(self, org_id: int = 1180):
+    def __init__(self, org_id: int = 1180, cutoff_date: Optional[str] = None):
         self.org_id = org_id
+        self.cutoff_date = self._parse_cutoff_date(cutoff_date)
         self.base_url = "https://api.matcherino.com/__api"
         self.headers = {
             'Accept': 'application/json, text/plain, */*',
@@ -38,6 +55,30 @@ class MatcherinoUnifiedManager:
         }
         self.processed_tournaments = self._load_processed_tournaments()
         self.all_tournament_data = []  # Stocker toutes les données
+        
+    def _parse_cutoff_date(self, cutoff_date: Optional[str]) -> Optional[datetime]:
+        """Parse et valide la cutoff_date"""
+        if not cutoff_date:
+            return None
+        
+        try:
+            # Essayer différents formats de date
+            for date_format in ['%Y-%m-%d', '%Y-%m-%d %H:%M:%S', '%d/%m/%Y', '%d/%m/%Y %H:%M:%S']:
+                try:
+                    parsed_date = datetime.strptime(cutoff_date, date_format)
+                    logging.info(f"Cutoff date configurée: {parsed_date.strftime('%Y-%m-%d %H:%M:%S')}")
+                    return parsed_date
+                except ValueError:
+                    continue
+            
+            # Si aucun format ne fonctionne
+            logging.error(f"Format de date invalide pour cutoff_date: {cutoff_date}")
+            logging.info("Formats acceptés: YYYY-MM-DD, YYYY-MM-DD HH:MM:SS, DD/MM/YYYY, DD/MM/YYYY HH:MM:SS")
+            return None
+            
+        except Exception as e:
+            logging.error(f"Erreur lors du parsing de la cutoff_date: {e}")
+            return None
         
     def _load_processed_tournaments(self) -> set:
         """Charge la liste des tournois déjà traités"""
@@ -487,6 +528,88 @@ class MatcherinoUnifiedManager:
         
         return str(timestamp)
     
+    def _should_exclude_tournament_by_date(self, tournament_activity: Dict) -> bool:
+        """Vérifie si un tournoi doit être exclu basé sur la cutoff_date"""
+        if not self.cutoff_date:
+            return False  # Pas de filtre, ne pas exclure
+        
+        # Récupérer la date du tournoi depuis l'activité
+        tournament_date_str = tournament_activity.get('bountyStartAt') or tournament_activity.get('startAt')
+        
+        if not tournament_date_str:
+            logging.debug(f"Pas de date trouvée pour le tournoi {tournament_activity.get('bountyId')}, inclusion par défaut")
+            return False  # Pas de date trouvée, inclure par défaut
+        
+        try:
+            # Parser la date du tournoi
+            tournament_date = self._parse_tournament_date(tournament_date_str)
+            if tournament_date and tournament_date < self.cutoff_date:
+                logging.debug(f"Tournoi {tournament_activity.get('bountyId')} exclu (date: {tournament_date.strftime('%Y-%m-%d %H:%M:%S')} < cutoff: {self.cutoff_date.strftime('%Y-%m-%d %H:%M:%S')})")
+                return True
+            
+        except Exception as e:
+            logging.warning(f"Erreur lors du parsing de la date du tournoi {tournament_activity.get('bountyId')}: {e}")
+            return False  # En cas d'erreur, inclure par défaut
+        
+        return False
+    
+    def _parse_tournament_date(self, date_str: str) -> Optional[datetime]:
+        """Parse une date de tournoi depuis l'API"""
+        if not date_str:
+            return None
+        
+        try:
+            # Format ISO 8601 avec Z
+            if isinstance(date_str, str):
+                if date_str.endswith('Z'):
+                    dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                else:
+                    dt = datetime.fromisoformat(date_str)
+                # Convertir en naive datetime pour la comparaison
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+                return dt
+            elif isinstance(date_str, (int, float)):
+                # Timestamp en millisecondes ou secondes
+                dt = datetime.fromtimestamp(date_str / 1000 if date_str > 1e10 else date_str)
+                return dt
+        except (ValueError, TypeError) as e:
+            logging.debug(f"Erreur de parsing de date {date_str}: {e}")
+        
+        return None
+    
+    def _filter_data_by_cutoff_date(self, data_rows: List[Dict]) -> List[Dict]:
+        """Filtre les lignes de données basé sur la cutoff_date en utilisant tournament_startAt"""
+        if not self.cutoff_date or not data_rows:
+            return data_rows
+        
+        filtered_rows = []
+        excluded_count = 0
+        
+        for row in data_rows:
+            tournament_start_str = row.get('tournament_startAt')
+            if not tournament_start_str:
+                # Pas de date, inclure par défaut
+                filtered_rows.append(row)
+                continue
+            
+            try:
+                tournament_date = self._parse_tournament_date(tournament_start_str)
+                if tournament_date and tournament_date < self.cutoff_date:
+                    excluded_count += 1
+                    continue  # Exclure cette ligne
+                
+                filtered_rows.append(row)
+                
+            except Exception as e:
+                logging.debug(f"Erreur lors du filtrage par date: {e}")
+                filtered_rows.append(row)  # En cas d'erreur, inclure
+        
+        if excluded_count > 0:
+            logging.info(f"Filtrage cutoff_date: {excluded_count} lignes exclues (antérieures à {self.cutoff_date.strftime('%Y-%m-%d %H:%M:%S')})")
+        
+        return filtered_rows
+    
     def save_all_tournament_data(self) -> str:
         """Sauvegarde toutes les données des tournois dans un seul fichier CSV"""
         if not self.all_tournament_data:
@@ -568,6 +691,8 @@ class MatcherinoUnifiedManager:
                 logging.debug(f"Tournoi {bounty_id} déjà traité, ignoré")
                 continue
             
+            # Note: On ne filtre plus les tournois ici, seulement les sets à la fin
+            
             logging.info(f"Vérification du tournoi: '{bounty_title}' (ID: {bounty_id})")
             
             # Vérifier si le tournoi est terminé
@@ -602,6 +727,15 @@ class MatcherinoUnifiedManager:
             # Pause entre les traitements pour éviter de surcharger l'API
             time.sleep(2)
         
+        # Filtrer les données par cutoff_date avant sauvegarde
+        if self.all_tournament_data:
+            original_count = len(self.all_tournament_data)
+            self.all_tournament_data = self._filter_data_by_cutoff_date(self.all_tournament_data)
+            final_count = len(self.all_tournament_data)
+            
+            if original_count != final_count:
+                logging.info(f"Filtrage final: {original_count - final_count} lignes supprimées par cutoff_date")
+        
         # Sauvegarder toutes les données dans un seul fichier CSV
         if self.all_tournament_data:
             csv_file = self.save_all_tournament_data()
@@ -623,8 +757,52 @@ class MatcherinoUnifiedManager:
 
 def main():
     """Fonction principale"""
+    parser = argparse.ArgumentParser(
+        description="Gestionnaire unifié pour les tournois Matcherino avec support de cutoff_date",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples d'utilisation:
+  python v4.py
+  python v4.py --cutoff-date "2024-01-01"
+  python v4.py --cutoff-date "2024-01-01 12:00:00"
+  python v4.py --cutoff-date "01/01/2024"
+  python v4.py --org-id 1180 --cutoff-date "2024-06-01"
+
+Formats de date acceptés:
+  - YYYY-MM-DD (ex: 2024-01-01)
+  - YYYY-MM-DD HH:MM:SS (ex: 2024-01-01 12:00:00)
+  - DD/MM/YYYY (ex: 01/01/2024)
+  - DD/MM/YYYY HH:MM:SS (ex: 01/01/2024 12:00:00)
+
+Note: Toutes les lignes avec une date antérieure à cutoff_date seront supprimées.
+        """
+    )
+    
+    parser.add_argument(
+        '--org-id',
+        type=int,
+        default=DEFAULT_ORG_ID,
+        help=f'ID de l\'organisation Matcherino (défaut: {DEFAULT_ORG_ID})'
+    )
+    
+    parser.add_argument(
+        '--cutoff-date',
+        type=str,
+        help='Date de coupure. Toutes les lignes antérieures à cette date seront supprimées. Formats acceptés: YYYY-MM-DD, YYYY-MM-DD HH:MM:SS, DD/MM/YYYY, DD/MM/YYYY HH:MM:SS'
+    )
+    
+    args = parser.parse_args()
+    
+    # Utiliser la cutoff_date des arguments ou la valeur par défaut configurée en haut du fichier
+    cutoff_date = args.cutoff_date or DEFAULT_CUTOFF_DATE
+    
     try:
-        manager = MatcherinoUnifiedManager(org_id=1180)
+        if cutoff_date:
+            logging.info(f"Démarrage avec cutoff_date: {cutoff_date}")
+        else:
+            logging.info("Démarrage sans filtre de date")
+            
+        manager = MatcherinoUnifiedManager(org_id=args.org_id, cutoff_date=cutoff_date)
         manager.run_complete_process()
     except KeyboardInterrupt:
         logging.info("Processus interrompu par l'utilisateur")
