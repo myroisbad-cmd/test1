@@ -220,6 +220,12 @@ class MatcherinoUnifiedManager:
         if not row.get('banned_brawlers_a') or not row.get('banned_brawlers_b'):
             return False
         
+        # Vérifier les bans individuels (Ban1-Ban6) - OBLIGATOIRE
+        for i in range(1, 7):  # Ban1 à Ban6
+            ban_value = row.get(f'Ban{i}', '').strip()
+            if not ban_value:
+                return False
+        
         # Vérifier que chaque équipe a au moins un joueur avec un brawler sélectionné
         team_a_has_picks = False
         team_b_has_picks = False
