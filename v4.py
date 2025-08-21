@@ -22,6 +22,11 @@ DEFAULT_CUTOFF_DATE = "2024-01-01"
 # ID de l'organisation par défaut
 DEFAULT_ORG_ID = 1180
 
+# Filtrage strict des données (supprime les lignes avec données manquantes)
+# True = Supprimer les lignes avec P, brawlers, tags ou bans manquants
+# False = Garder toutes les lignes même avec des données manquantes
+STRICT_DATA_FILTERING = True
+
 # ==============================
 
 # Configuration du logging
@@ -227,6 +232,51 @@ class MatcherinoUnifiedManager:
         
         return team_a_has_picks and team_b_has_picks
     
+    def _has_complete_data(self, row: Dict) -> bool:
+        """Vérifie si une ligne a toutes les données requises : P, brawlers, tags et bans"""
+        
+        # Vérifier les bans des deux équipes (au moins 1 ban par équipe)
+        banned_a = row.get('banned_brawlers_a', '').strip()
+        banned_b = row.get('banned_brawlers_b', '').strip()
+        if not banned_a or not banned_b:
+            return False
+        
+        # Vérifier les bans individuels (Ban1-Ban6)
+        for i in range(1, 7):  # Ban1 à Ban6
+            ban_value = row.get(f'Ban{i}', '').strip()
+            if not ban_value:
+                return False
+        
+        # Vérifier que chaque équipe a 3 joueurs complets
+        for team in ['a', 'b']:
+            for player_num in range(1, 4):  # 3 joueurs par équipe
+                # Vérifier les données détaillées des joueurs
+                player_tag = row.get(f'team_{team}_player_{player_num}_tag', '').strip()
+                player_brawler = row.get(f'team_{team}_player_{player_num}_brawler', '').strip()
+                
+                if not player_tag or not player_brawler:
+                    return False
+        
+        # Vérifier les données P1-P6 (noms des joueurs)
+        for i in range(1, 7):  # P1 à P6
+            p_value = row.get(f'P{i}', '').strip()
+            if not p_value:
+                return False
+        
+        # Vérifier les données Brawler1-Brawler6
+        for i in range(1, 7):  # Brawler1 à Brawler6
+            brawler_value = row.get(f'Brawler{i}', '').strip()
+            if not brawler_value:
+                return False
+        
+        # Vérifier les données Tag1-Tag6
+        for i in range(1, 7):  # Tag1 à Tag6
+            tag_value = row.get(f'Tag{i}', '').strip()
+            if not tag_value:
+                return False
+        
+        return True
+    
     def process_tournament_to_csv_format(self, brackets: List[Dict], tournament_activity: Dict) -> List[Dict]:
         """Traite les données du tournoi selon le format CSV spécifié"""
         if not brackets:
@@ -323,11 +373,19 @@ class MatcherinoUnifiedManager:
                         # Créer la ligne complète
                         row = {**tournament_info, **match_info, **game_details, **game_info}
 
-                        # Filtrer les lignes avec bans/picks manquants
-                        if self._has_complete_bans_and_picks(row):
-                            all_rows.append(row)
+                        # Filtrer les lignes selon la configuration
+                        if STRICT_DATA_FILTERING:
+                            # Filtrage strict : supprimer les lignes avec données manquantes
+                            if self._has_complete_data(row):
+                                all_rows.append(row)
+                            else:
+                                logging.debug(f"Ligne filtrée (données manquantes) - Match {match_info.get('match_id', 'N/A')} Set {set_num}")
                         else:
-                            logging.debug(f"Ligne filtrée (bans/picks manquants) - Match {match_info.get('match_id', 'N/A')} Set {set_num}")
+                            # Filtrage minimal : garder les lignes avec au moins quelques bans/picks
+                            if self._has_complete_bans_and_picks(row):
+                                all_rows.append(row)
+                            else:
+                                logging.debug(f"Ligne filtrée (bans/picks manquants) - Match {match_info.get('match_id', 'N/A')} Set {set_num}")
         
         return all_rows
     
@@ -767,6 +825,9 @@ Exemples d'utilisation:
   python v4.py --cutoff-date "2024-01-01 12:00:00"
   python v4.py --cutoff-date "01/01/2024"
   python v4.py --org-id 1180 --cutoff-date "2024-06-01"
+  python v4.py --strict-filtering
+  python v4.py --no-strict-filtering
+  python v4.py --cutoff-date "2024-01-01" --strict-filtering
 
 Formats de date acceptés:
   - YYYY-MM-DD (ex: 2024-01-01)
@@ -775,6 +836,10 @@ Formats de date acceptés:
   - DD/MM/YYYY HH:MM:SS (ex: 01/01/2024 12:00:00)
 
 Note: Toutes les lignes avec une date antérieure à cutoff_date seront supprimées.
+
+Filtrage des données:
+  --strict-filtering    : Supprimer les lignes avec des P, brawlers, tags ou bans manquants
+  --no-strict-filtering : Conserver les lignes même avec des données partielles
         """
     )
     
@@ -791,23 +856,63 @@ Note: Toutes les lignes avec une date antérieure à cutoff_date seront supprim�
         help='Date de coupure. Toutes les lignes antérieures à cette date seront supprimées. Formats acceptés: YYYY-MM-DD, YYYY-MM-DD HH:MM:SS, DD/MM/YYYY, DD/MM/YYYY HH:MM:SS'
     )
     
+    parser.add_argument(
+        '--strict-filtering',
+        action='store_true',
+        default=STRICT_DATA_FILTERING,
+        help='Activer le filtrage strict (supprimer les lignes avec P, brawlers, tags ou bans manquants)'
+    )
+    
+    parser.add_argument(
+        '--no-strict-filtering',
+        action='store_true',
+        help='Désactiver le filtrage strict (garder toutes les lignes même avec des données manquantes)'
+    )
+    
     args = parser.parse_args()
     
     # Utiliser la cutoff_date des arguments ou la valeur par défaut configurée en haut du fichier
     cutoff_date = args.cutoff_date or DEFAULT_CUTOFF_DATE
+    
+    # Gérer le filtrage strict
+    strict_filtering = STRICT_DATA_FILTERING
+    if args.no_strict_filtering:
+        strict_filtering = False
+    elif args.strict_filtering:
+        strict_filtering = True
     
     try:
         if cutoff_date:
             logging.info(f"Démarrage avec cutoff_date: {cutoff_date}")
         else:
             logging.info("Démarrage sans filtre de date")
-            
+        
+        if strict_filtering:
+            logging.info("Filtrage strict activé : suppression des lignes avec données manquantes (P, brawlers, tags, bans)")
+        else:
+            logging.info("Filtrage minimal : conservation des lignes avec bans/picks partiels")
+        
+        # Appliquer temporairement la configuration de filtrage
+        global STRICT_DATA_FILTERING
+        original_filtering = STRICT_DATA_FILTERING
+        STRICT_DATA_FILTERING = strict_filtering
+        
         manager = MatcherinoUnifiedManager(org_id=args.org_id, cutoff_date=cutoff_date)
         manager.run_complete_process()
+        
+        # Restaurer la configuration originale
+        STRICT_DATA_FILTERING = original_filtering
+        
     except KeyboardInterrupt:
         logging.info("Processus interrompu par l'utilisateur")
     except Exception as e:
         logging.error(f"Erreur inattendue: {e}")
+    finally:
+        # S'assurer que la configuration est restaurée même en cas d'erreur
+        try:
+            STRICT_DATA_FILTERING = original_filtering
+        except:
+            pass
 
 if __name__ == "__main__":
     main()
