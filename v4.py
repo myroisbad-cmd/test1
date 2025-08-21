@@ -9,6 +9,21 @@ import logging
 import sys
 import argparse
 
+# ==============================
+# CONFIGURATION
+# ==============================
+# Modifiez ces valeurs selon vos besoins :
+
+# Date de coupure par défaut (toutes les lignes antérieures seront supprimées)
+# Formats acceptés: "YYYY-MM-DD", "YYYY-MM-DD HH:MM:SS", "DD/MM/YYYY", "DD/MM/YYYY HH:MM:SS"
+# Mettez None ou "" pour désactiver le filtre par défaut
+DEFAULT_CUTOFF_DATE = "2024-01-01"
+
+# ID de l'organisation par défaut
+DEFAULT_ORG_ID = 1180
+
+# ==============================
+
 # Configuration du logging
 logging.basicConfig(
     level=logging.INFO,
@@ -769,8 +784,8 @@ Note: Toutes les lignes avec une date antérieure à cutoff_date seront supprim�
     parser.add_argument(
         '--org-id',
         type=int,
-        default=1180,
-        help='ID de l\'organisation Matcherino (défaut: 1180)'
+        default=DEFAULT_ORG_ID,
+        help=f'ID de l\'organisation Matcherino (défaut: {DEFAULT_ORG_ID})'
     )
     
     parser.add_argument(
@@ -781,13 +796,16 @@ Note: Toutes les lignes avec une date antérieure à cutoff_date seront supprim�
     
     args = parser.parse_args()
     
+    # Utiliser la cutoff_date des arguments ou la valeur par défaut configurée en haut du fichier
+    cutoff_date = args.cutoff_date or DEFAULT_CUTOFF_DATE
+    
     try:
-        if args.cutoff_date:
-            logging.info(f"Démarrage avec cutoff_date: {args.cutoff_date}")
+        if cutoff_date:
+            logging.info(f"Démarrage avec cutoff_date: {cutoff_date}")
         else:
             logging.info("Démarrage sans filtre de date")
             
-        manager = MatcherinoUnifiedManager(org_id=args.org_id, cutoff_date=args.cutoff_date)
+        manager = MatcherinoUnifiedManager(org_id=args.org_id, cutoff_date=cutoff_date)
         manager.run_complete_process()
     except KeyboardInterrupt:
         logging.info("Processus interrompu par l'utilisateur")

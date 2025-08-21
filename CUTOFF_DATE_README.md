@@ -26,13 +26,38 @@ Le fichier `v4.py` a été modifié pour ajouter une fonctionnalité de **cutoff
 - `DD/MM/YYYY` (ex: 01/01/2024)
 - `DD/MM/YYYY HH:MM:SS` (ex: 01/01/2024 12:00:00)
 
-## Exemples d'utilisation
+## Configuration de la cutoff_date
+
+### Option 1 : Configuration directe dans le fichier (RECOMMANDÉ)
+
+Modifiez la section de configuration en haut du fichier `v4.py` :
+
+```python
+# ==============================
+# CONFIGURATION
+# ==============================
+# Modifiez ces valeurs selon vos besoins :
+
+# Date de coupure par défaut (toutes les lignes antérieures seront supprimées)
+DEFAULT_CUTOFF_DATE = "2024-01-01"  # ← MODIFIEZ CETTE LIGNE
+
+# ID de l'organisation par défaut
+DEFAULT_ORG_ID = 1180
+```
+
+**Exemples de valeurs pour DEFAULT_CUTOFF_DATE :**
+- `"2024-01-01"` - Supprimer tout avant le 1er janvier 2024
+- `"2024-06-15 12:00:00"` - Supprimer tout avant le 15 juin 2024 à midi
+- `"01/01/2024"` - Format français
+- `None` ou `""` - Désactiver le filtre par défaut
+
+### Option 2 : Paramètres en ligne de commande
 
 ```bash
-# Exécution normale sans filtre
+# Exécution avec la cutoff_date configurée dans le fichier
 python3 v4.py
 
-# Filtrer les données antérieures au 1er janvier 2024
+# Surcharger la cutoff_date configurée dans le fichier
 python3 v4.py --cutoff-date "2024-01-01"
 
 # Filtrer avec une heure spécifique
@@ -47,6 +72,8 @@ python3 v4.py --org-id 1180 --cutoff-date "2024-06-01"
 # Afficher l'aide
 python3 v4.py --help
 ```
+
+**Note :** Les paramètres en ligne de commande ont la priorité sur la configuration du fichier.
 
 ## Méthodes ajoutées
 
